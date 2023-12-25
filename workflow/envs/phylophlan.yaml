@@ -1,0 +1,9 @@
+channels:
+ - conda-forge
+ - bioconda
+dependencies:
+ - phylophlan=3.0.2
+ - iqtree=2.1.2
+ - mafft=7.475
+ - trimal=1.4.1
+ - diamond=2.1.8

@@ -1,0 +1,302 @@
+
+prot_min = 40
+prot_max = 400
+
+configfile: "config.yaml"
+
+databases = config["databases"]
+genomes ,= glob_wildcards("input/genomes/{acc}.fna")
+fragments ,= glob_wildcards("input/genomes_pol/{acc}.faa")
+
+rule all:
+    input:
+        "analysis/phylophlan_markers/phylophlan.tre.treefile"
+        # expand("analysis/exonuclease/{database}_nblA.tab", database = databases.keys())
+        # expand("analysis/hmmsearch/{database}/nblA.faa", database = databases.keys())
+
+rule fas_a2m:
+    input:
+        "input/profile/nblA.fasta"
+    output:
+        "analysis/profile/nblA.a2m"
+    conda:
+        "envs/reformat.yaml"
+    shell:
+        """
+        export PATH=$CONDA_PREFIX/scripts:$PATH
+        reformat.pl fas a2m {input} {output} -M 50
+        """
+
+rule build_hmm:
+    input:
+        "analysis/profile/nblA.a2m"
+    output:
+        "analysis/profile/nblA.hmm"
+    params:
+        profile = "nblA"
+    conda:
+        "envs/search.yaml"
+    shell:
+        "hmmbuild -n {params.profile} {output} {input}"
+
+rule split_contigs:
+    input:
+        "analysis/contigs/{database}.fna"
+    output:
+        directory("analysis/contigs/{database}_split")
+    conda:
+        "envs/search.yaml"
+    shell:
+        "seqkit split -i --id-regexp '(\\w+)' --by-id-prefix '' -O {output} {input}"
+
+rule drep:
+    input:
+        expand("analysis/contigs/{database}_split", database = databases)
+    output:
+        outdir = directory("analysis/contigs/drep"),
+        contigs = directory("analysis/contigs/drep/dereplicated_genomes")
+    params:
+        files = lambda w, input: [ d + '/*' for d in input ],
+        length = 30000,
+        ident = 0.95
+    conda:
+        "envs/drep.yaml"
+    threads:
+        workflow.cores
+    shell:
+        "dRep dereplicate {output.outdir} -p {threads} -g {params.files} -l {params.length} -sa {params.ident} --S_algorithm ANImf --ignoreGenomeQuality"
+
+rule cat_genomes:
+    input:
+        contigs = "analysis/contigs/drep/dereplicated_genomes",
+        refs = "input/genomes"
+    output:
+        "analysis/genomes/all_genomes.fna"
+    shell:
+        "cat {input.refs}/*.fna {input.contigs}/*.fna > {output}"
+
+rule prodigal:
+    input:
+        "analysis/genomes/all_genomes.fna"
+    output:
+        faa = "analysis/genomes/all_genomes.faa",
+        cds = "analysis/genomes/all_genomes.cds",
+        gff = "analysis/genomes/all_genomes.gff"
+    shadow:
+        "minimal"
+    conda:
+        "envs/prodigal.yaml"
+    shell:
+        "prodigal -i {input} -a {output.faa} -d {output.cds} -f gff -o {output.gff}"
+
+rule split_faa:
+    input:
+        "analysis/genomes/all_genomes.faa"
+    output:
+        directory("analysis/phylophlan")
+    conda:
+        "envs/search.yaml"
+    shell:
+        "seqkit split -i --id-regexp '(\\w+)_\\d+' --by-id-prefix '' -O {output} {input}"
+
+rule phylophlan_markers:
+    input:
+        "input/{set}.faa"
+    output:
+        "analysis/{set}/markers.faa"
+    params:
+        out_dir = "analysis/{set}",
+        name = "markers"
+    conda:
+        "envs/phylophlan.yaml"
+    shell:
+        "phylophlan_setup_database -i {input} -o {params.out_dir} -d {params.name} -t a"
+
+rule phylophlan_marker_mods:
+    input:
+        "input/{set}.faa"
+    output:
+        "analysis/{set}/markers.tsv"
+    params:
+        model = "PROTCATLG"
+    conda:
+        "envs/search.yaml"
+    shell:
+        "seqkit seq -ni {input} | sed 's/$/\t{params.model}/' > {output}"
+
+rule phylophal_pol_input:
+    input:
+        expand("analysis/prodigal/{acc}.faa", acc = genomes),
+        expand("input/genomes_pol/{acc}.faa", acc = fragments)
+    output:
+        directory("analysis/combined")
+    shell:
+        "mkdir -p {output} && ln -rs {input} {output}/"
+
+rule phylophlan_pol:
+    input:
+        work_dir = "analysis/combined",
+        cfg = "input/phylophlan.cfg",
+        faa = "analysis/markers_pol/markers.faa",
+        maas = "analysis/markers_pol/markers.tsv"
+    output:
+        "analysis/combined_markers_pol/combined.tre.treefile",
+        directory("analysis/combined_markers_pol")
+    params:
+        db = "markers_pol"
+    conda:
+        "envs/phylophlan.yaml"
+    threads:
+        4
+    shell:
+        "phylophlan -i {input.work_dir} -t a -f {input.cfg} --diversity high --trim gap_trim --subsample full --min_num_markers 1 -d {params.db} --nproc {threads} --output_folder analysis --verbose --maas {input.maas} --databases_folder analysis"
+
+rule phylophlan:
+    input:
+        markers = "analysis/markers/markers.faa",
+        work_dir = "analysis/phylophlan",
+        cfg = "metadata/phylophlan.cfg",
+        maas = "analysis/markers/markers.tsv"
+    output:
+        "analysis/phylophlan_markers/phylophlan.tre.treefile",
+        directory("analysis/phylophlan_markers")
+    params:
+        db = "markers",
+        min_markers = 8
+    conda:
+        "envs/phylophlan.yaml"
+    threads:
+        4
+    shell:
+        "phylophlan -i {input.work_dir} -t a -f {input.cfg} --diversity high --trim gap_trim --subsample full --min_num_markers {params.min_markers} -d {params.db} --nproc {threads} --output_folder analysis --verbose --maas {input.maas} --databases_folder analysis"
+
+rule tblastn:
+    input:
+        "input/exonuclease.faa"
+    output:
+        "analysis/exonuclease/{database}.outfmt6"
+    params:
+        db = lambda w: "databases/{database}/{prefix}".format(database = w.database, prefix = databases[w.database])
+    conda:
+        "envs/blast.yaml"
+    threads:
+        20
+    shell:
+        "tblastn -db {params.db} -query {input} -outfmt 6 -out {output} -num_threads {threads} -max_target_seqs 100000000"
+
+rule filter_tblastn:
+    input:
+        "analysis/exonuclease/{database}.outfmt6"
+    output:
+        "analysis/exonuclease/{database}.tsv"
+    params:
+        min_len = 128,
+        min_ident = 40
+    shell:
+        "sort -k12,12rn {input} | awk '!_[$2];{{_[$2]=1}}' | awk -vl={params.min_len} -vi={params.min_ident} '$4>l&&$3>i' > {output}"
+
+rule extract_exo_contigs:
+    input:
+         "analysis/exonuclease/{database}.tsv"
+    output:
+        "analysis/exonuclease/{database}_contigs.fna"
+    params:
+        db = lambda w: "databases/{database}/{prefix}".format(database = w.database, prefix = databases[w.database])
+    conda:
+        "envs/blast.yaml"
+    shell:
+        "cut -f2 {input} | blastdbcmd -db {params.db} -entry_batch - > {output}"
+
+rule contigs_with_exonuclease:
+    input:
+        regions = "analysis/exonuclease/{database}_regions.fna",
+        tsv = "analysis/exonuclease/{database}.tsv",
+        fna = "analysis/exonuclease/{database}_contigs.fna",
+    output:
+        "analysis/contigs/{database}.fna"
+    conda:
+        "envs/search.yaml"
+    shell:
+        "seqkit seq -ni {input.regions} | seqkit grep -f- {input.fna} -o {output}"
+
+rule extract_exo_genes:
+    input:
+        tsv = "analysis/exonuclease/{database}.tsv",
+        fna = "analysis/exonuclease/{database}_contigs.fna"
+    output:
+        "analysis/exonuclease/{database}_regions.fna"
+    params:
+        min_pad = 200,
+        max_pad = 1000
+    conda:
+        "envs/python.yaml"
+    script:
+        "scripts/extract_gene.py"
+
+rule hmmsearch:
+    input:
+        hmm = "analysis/profile/nblA.hmm",
+        fna = "analysis/exonuclease/{database}_regions.fna"
+    output:
+        "analysis/exonuclease/{database}_nblA.txt"
+    conda:
+        "envs/search.yaml"
+    shell:
+        "getorf -filter -find 0 {input.fna} | hmmsearch --cpu 1 -o {output} {input.hmm} -"
+
+rule parse_hmmsearch:
+    input:
+        "analysis/exonuclease/{database}_nblA.txt"
+    output:
+        "analysis/exonuclease/{database}_nblA.jsonl"
+    conda:
+        "envs/python.yaml"
+    script:
+        "scripts/parse_hmmsearch.py"
+
+rule regions_with_nbla:
+    input:
+        fna = "analysis/exonuclease/{database}_regions.fna",
+        blast = "analysis/exonuclease/{database}.tsv",
+        jsonl  = "analysis/exonuclease/{database}_nblA.jsonl",
+        phages = "input/phages.xlsx"
+    output:
+        "analysis/exonuclease/{database}_nblA.tab"
+    conda:
+        "envs/python.yaml"
+    script:
+        "scripts/regions_with_nbla.py"
+
+rule isolated_genes_query:
+    input:
+        "input/isolated_genes.xlsx"
+    output:
+        "analysis/isolated_genes/genes.fna"
+    conda:
+        "envs/python.yaml"
+    script:
+        "scripts/isolated_genes.py"
+
+rule makeblast:
+    input:
+        "analysis/isolated_genes/genes.fna"
+    output:
+        "analysis/isolated_genes/genes.fna.ndb"
+    conda:
+        "envs/search.yaml"
+    shell:
+        "makeblastdb -in {input} -dbtype nucl"
+
+rule isolated_genes_search:
+    input:
+        db = "analysis/isolated_genes/genes.fna",
+        ndb = "analysis/isolated_genes/genes.fna.ndb",
+        query = "analysis/contigs/{database}.fna"
+    output:
+        "analysis/contigs/{database}_isolated_genes.outfmt6"
+    params:
+        cols = 'qseqid sseqid pident length mismatch gapopen qstart qend sstart send evalue bitscore stitle'
+    conda:
+        "envs/phylophlan.yaml"
+    shell:
+        "blastn -query {input.query} -db {input.db} -out {output} -outfmt '6 {params.cols}'"
