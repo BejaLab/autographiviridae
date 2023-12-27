@@ -1,0 +1,27 @@
+channels:
+ - conda-forge
+ - bioconda
+dependencies:
+ - r=4.1
+ - r-dplyr=1.0.7
+ - r-tibble=3.1.6
+ - r-tidyr=1.1.4
+ - r-ape=5.5
+ - r-adephylo=1.1_11
+ - r-ggnewscale=0.4.5
+ - r-ggplot2=3.3.6
+ - r-ggforce=0.4.1
+ - r-maps=3.4.0
+ - r-pals=1.7
+ - r-phangorn=2.8.0
+ - r-phytools=0.7_90
+ - r-readxl=1.3.1
+ - bioconductor-ggtree=3.2.0
+ - bioconductor-ggtreeextra=1.4.0
+ - bioconductor-treeio=1.18.0
+ - r-svglite
+ - r-ggraph=2.1.0
+ - r-igraph=1.4.3
+ - r-randomcolor=1.1.0
+ - r-seqinr=4.2_30
+ - r-castor=1.7.10

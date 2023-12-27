@@ -1,14 +1,11 @@
 from Bio import SeqIO
-from pandas import read_excel
 import jsonlines
 
 blast_file = snakemake.input['blast']
 fasta_file = snakemake.input['fasta']
 jsonl_file = snakemake.input['jsonl']
-phages_file = snakemake.input['phages']
 
-phages = read_excel(phages_file)
-clades = dict(zip(phages['Phage'], phages['Subclade']))
+clades = snakemake.params['clades']
 
 out_file = str(snakemake.output)
 

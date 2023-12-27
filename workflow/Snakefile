@@ -1,3 +1,4 @@
+from pandas import read_excel
 
 prot_min = 40
 prot_max = 400
@@ -6,13 +7,16 @@ configfile: "config.yaml"
 
 databases = config["databases"]
 genomes ,= glob_wildcards("input/genomes/{acc}.fna")
+ref_contigs ,= glob_wildcards("input/ref_contigs/{acc}.fna")
 fragments ,= glob_wildcards("input/genomes_pol/{acc}.faa")
+phages = read_excel("input/phages.xlsx")
+clades = dict(zip(phages['Accession'], phages['Subclade']))
 
 rule all:
     input:
-        "analysis/phylophlan_markers/phylophlan.tre.treefile"
-        # expand("analysis/exonuclease/{database}_nblA.tab", database = databases.keys())
-        # expand("analysis/hmmsearch/{database}/nblA.faa", database = databases.keys())
+        "analysis/phylophlan_markers/phylophlan.tre.treefile",
+        expand("analysis/exonuclease/{database}_nblA.tab", database = databases),
+        expand("analysis/contigs/{database}_isolated_genes.outfmt6", database = databases)
 
 rule fas_a2m:
     input:
@@ -72,8 +76,10 @@ rule cat_genomes:
         refs = "input/genomes"
     output:
         "analysis/genomes/all_genomes.fna"
+    conda:
+        "envs/search.yaml"
     shell:
-        "cat {input.refs}/*.fna {input.contigs}/*.fna > {output}"
+        "seqkit rmdup -s -o {output} {input.refs}/*.fna {input.contigs}/*.fna"
 
 rule prodigal:
     input:
@@ -155,7 +161,7 @@ rule phylophlan:
     input:
         markers = "analysis/markers/markers.faa",
         work_dir = "analysis/phylophlan",
-        cfg = "metadata/phylophlan.cfg",
+        cfg = "input/phylophlan.cfg",
         maas = "analysis/markers/markers.tsv"
     output:
         "analysis/phylophlan_markers/phylophlan.tre.treefile",
@@ -190,10 +196,11 @@ rule filter_tblastn:
     output:
         "analysis/exonuclease/{database}.tsv"
     params:
+        exlclude = 'Pelagiphage',
         min_len = 128,
-        min_ident = 40
+        min_score = 115
     shell:
-        "sort -k12,12rn {input} | awk '!_[$2];{{_[$2]=1}}' | awk -vl={params.min_len} -vi={params.min_ident} '$4>l&&$3>i' > {output}"
+        "sort -k12,12rn {input} | awk '!_[$2];{{_[$2]=1}}' | awk -vL={params.min_len} -vS={params.min_score} '$4>L && $12>S' > {output}"
 
 rule extract_exo_contigs:
     input:
@@ -256,16 +263,28 @@ rule parse_hmmsearch:
 
 rule regions_with_nbla:
     input:
-        fna = "analysis/exonuclease/{database}_regions.fna",
+        fasta = "analysis/exonuclease/{database}_regions.fna",
         blast = "analysis/exonuclease/{database}.tsv",
-        jsonl  = "analysis/exonuclease/{database}_nblA.jsonl",
-        phages = "input/phages.xlsx"
+        jsonl  = "analysis/exonuclease/{database}_nblA.jsonl"
     output:
         "analysis/exonuclease/{database}_nblA.tab"
+    params:
+        clades = clades
     conda:
         "envs/python.yaml"
     script:
         "scripts/regions_with_nbla.py"
+
+rule imgvr_metadata:
+    input:
+        blast = "analysis/exonuclease/IMGVR.tsv",
+        tsv = "databases/IMGVR/IMGVR_all_Sequence_information-high_confidence.tsv"
+    output:
+        "analysis/exonuclease/IMGVR_metadata.csv"
+    conda:
+        "envs/search.yaml"
+    shell:
+        "cut -f2 {input.blast} | sed -E 's/_1$//' | csvgrep -t -f- -c UVIG {input.tsv} > {output}"
 
 rule isolated_genes_query:
     input:
@@ -300,3 +319,15 @@ rule isolated_genes_search:
         "envs/phylophlan.yaml"
     shell:
         "blastn -query {input.query} -db {input.db} -out {output} -outfmt '6 {params.cols}'"
+
+rule plot_tree:
+    input:
+        tree = "analysis/phylophlan_markers/phylophlan.tre.treefile",
+        xlsx = "input/phages.xlsx",
+        metadata = "analysis/exonuclease/IMGVR_metadata.csv"
+    output:
+        "output/phylophlan.svg"
+    conda:
+        "envs/r.yaml"
+    script:
+        "scripts/plot_tree.R"
