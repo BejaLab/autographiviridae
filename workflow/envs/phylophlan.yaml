@@ -7,3 +7,5 @@ dependencies:
  - mafft=7.475
  - trimal=1.4.1
  - diamond=2.1.8
+ - astral-tree=5.7.8
+ - raxml=8.2.13

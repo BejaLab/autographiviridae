@@ -3,6 +3,7 @@ import jsonlines
 
 input_file = str(snakemake.input)
 output_file = str(snakemake.output)
+threshold = snakemake.params['threshold']
 
 domains = {}
 
@@ -32,7 +33,7 @@ def parse_complete_data(fh):
         if not line.startswith('--') and not line.startswith('E-value'):
             full_E_value, full_score, full_bias, best_E_value, best_score, best_bias, exp, N, Sequence, *rest = line.split()
             values[Sequence] = {
-                "full": {
+            "full": {
                     "evalue": float(full_E_value),
                     "score": float(full_score),
                     "bias": float(full_bias)
@@ -163,11 +164,12 @@ with jsonlines.open(output_file, 'w') as writer:
                 seq_name, seq_desc = parse_seq_name_desc(line)
                 assert seq_name in complete_data, f"Sequence does not appear in the complete sequences table: {seq_name}"
                 data = complete_data[seq_name]
-                data["description"] = seq_desc
-                data["profile"] = {
-                    "name": hmm_name,
-                    "len": hmm_len
-                }
-                data["domains"] = parse_domain_data(file)
-                data["seq_name"] = seq_name
-                writer.write(data)
+                if data["full"]["score"] >= threshold:
+                    data["description"] = seq_desc
+                    data["profile"] = {
+                        "name": hmm_name,
+                        "len": hmm_len
+                    }
+                    data["domains"] = parse_domain_data(file)
+                    data["seq_name"] = seq_name
+                    writer.write(data)

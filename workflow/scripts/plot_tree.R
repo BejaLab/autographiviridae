@@ -9,61 +9,68 @@ library(ggtreeExtra)
 library(tibble)
 library(adephylo)
 library(ggplot2)
-library(ggstar)
 library(castor)
+library(jsonlite)
 
 with(snakemake@input, {
     tree_file <<- tree
-    ref_file <<- xlsx
-    imgvr_file <<- metadata
+    ref_file <<- refs
+    imgvr_file <<- imgvr
+    cluster_file <<- clusters
+    strain_file <<- strains
+    exo_nbla_files <<- exo_nbla
+    genome_nbla_file <<- genome_nbla
+})
+with(snakemake@output, {
+    plot_all_file <<- plot_all
+    plot_ref_file <<- plot_ref
+    jtree_file <<- jtree
 })
 with(snakemake@params, {
-    ingroup_group <<- ingroup
-    outgroup_group <<- outgroup
+    w_all <<- w_all
+    h_all <<- h_all
+    w_ref <<- w_ref
+    h_ref <<- h_ref
+    nbla_min_score <<- nbla_min_score
+    max_mrca_dist <<- max_mrca_dist
 })
-
-tree_file <- "analysis/phylophlan_markers/phylophlan.tre.treefile"
-ref_file <- "input/phages.xlsx"
-imgvr_file <- "analysis/exonuclease/IMGVR_metadata.csv"
-cluster_file <- "input/host_clusters.xlsx"
-strain_file <- "input/host_strains.xlsx"
-exo_nbla_files <- Sys.glob("analysis/exonuclease/*_nblA.tab")
-single_gene_blast_files <- Sys.glob("analysis/contigs/*_isolated_genes.outfmt6")
-
-plot_file <- "tmp.svg"
-
-ingroup_group <- "cyanophage"
-outgroup_group <- c("pelagiphage", "coliphage")
+# tree_file <- "analysis/phylophlan_markers/phylophlan.tre.treefile"
+# ref_file <- "input/phages.xlsx"
+# imgvr_file <- "analysis/exonuclease/IMGVR_metadata.csv"
+# cluster_file <- "input/host_clusters.xlsx"
+# strain_file <- "input/host_strains.xlsx"
+# exo_nbla_files <- Sys.glob("analysis/exonuclease/*_nblA.tab")
+# genome_nbla_file <- "analysis/genomes/nblA.jsonl"
+# plot_file <- "tmp.svg"
+# jtree_file <- "tmp.jtree"
 
 strains <- read_excel(strain_file) %>%
-   rename(Host = Strain, Host.taxonomy.prediction = Taxonomy)
+    rename(Host = Strain, Host.taxonomy.prediction = Taxonomy)
 clusters <- read_excel(cluster_file) %>%
-   rename(Host.genus = Genus, Host.cluster = Cluster, Host.color = color)
+    rename(Host.genus = Genus, Host.cluster = Cluster, Host.color = color)
 
-col_names <- c("qseqid", "sseqid", "pident", "length", "mismatch", "gapopen", "qstart", "qend", "sstart", "send", "evalue", "bitscore", "stitle")
-single_gene_blast <- lapply(single_gene_blast_files, read.table, col.names = col_names, sep = "\t") %>%
-   bind_rows %>%
-   arrange(-bitscore) %>%
-   extract(sseqid, into = c("Phage", "gene"), regex = "(.+)_([^_]+)") %>%
-   extract(stitle, into = "Host", regex = "[^ ]+ ([^,]+)") %>%
-   distinct(Phage, .keep_all = T) %>%
-   filter(pident > 95) %>%
-   select(Accession = qseqid, Phage, Host, pident) %>%
-   mutate(Host.evidence = "blast") %>%
-   left_join(strains, by = "Host")
+col_names <- c("Accession", "source", "feature", "start", "end", "score", "strand", "frame", "attribute")
+exo_nblas <- lapply(exo_nbla_files, read.table, header = F, row.names = NULL, col.names = col_names, sep = "\t") %>%
+    bind_rows %>%
+    filter(feature == "nblA") %>%
+    select(Accession) %>%
+    mutate(nblA = "exonuclease")
 
-col_names <- c("Accession", "Ref", "Ref_clade", "Ref_identity", "Ref_length", "nblA_ORF", "Score", "Evalue")
-nbla <- lapply(exo_nbla_files, read.table, header = F, row.names = NULL, col.names = col_names, sep = "\t") %>%
-   bind_rows %>%
-   filter(Score > 0) %>%
-   select(Accession) %>%
-   mutate(nblA = "exonuclease")
+all_nblas <- readLines(genome_nbla_file) %>%
+    lapply(fromJSON) %>%
+    lapply(unlist) %>%
+    bind_rows %>%
+    filter(full.score > nbla_min_score) %>%
+    mutate(Accession = sub("_[0-9]+$", "", seq_name)) %>%
+    filter(! Accession %in% exo_nblas$Accession) %>%
+    mutate(nblA = "other") %>%
+    bind_rows(exo_nblas)
 
 ref_metadata <- read_excel(ref_file) %>%
     left_join(strains, by = "Host")
-ingroup <- filter(ref_metadata, Group %in% ingroup_group) %>%
+ingroup <- filter(ref_metadata, Group == "ingroup") %>%
     pull(Accession)
-outgroup <- filter(ref_metadata, Group %in% outgroup_group) %>%
+outgroup <- filter(ref_metadata, Group == "outgroup") %>%
     pull(Accession)
 
 root_tree <- function(tree, some_outgroup, some_ingroup) {
@@ -82,7 +89,7 @@ get_mrca <- function(phylo, tips) {
     getMRCA(phylo, tips) %>%
         replace(is.null(.), NA)
 }
-add_mrca <- function(tree, colname, max_dist = 0.8) {
+add_mrca <- function(tree, colname, max_dist = 0) {
     colname <- deparse(substitute(colname))
     phylo <- to_treedata(tree)@phylo
     tree_df <- mutate(tree, my_column = !!as.name(colname))
@@ -108,37 +115,29 @@ add_mrca <- function(tree, colname, max_dist = 0.8) {
     tree[[paste0(colname, "_mrca")]] <- mrca
     return(tree)
 }
+annotate_tree <- function(tree, metadata, max_dist) {
+    as_tibble(tree) %>%
+        mutate(support = ifelse(node %in% parent, label, NA)) %>%
+        separate(support, into = c("SH_aLRT", "UFBoot"), sep = "/", convert = T) %>%
+        left_join(metadata, by = c(label = "Accession")) %>%
+        add_mrca(Clade) %>%
+        add_mrca(Subclade, max_dist = max_dist) %>% 
+        to_treedata
+}
 to_treedata <- function(tree) {
     class(tree) <- c("tbl_tree", "tbl_df", "tbl", "data.frame")
     as.treedata(tree)
-}
-parse_support <- function(tree) {
-    mutate(tree, support = ifelse(node %in% parent, label, NA)) %>%
-        separate(support, into = c("SH_aLRT", "UFBoot"), sep = "/", convert = T)
-}
-pick_support_values <- function(tree, support_col, max_dist = 1) {
-    support_col <- deparse(substitute(support_col))
-    phylo <- as.treedata(tree)@phylo
-    parents <- get_all_distances_to_root(phylo) %>%
-        {data.frame(dist = ., node = 1:length(.))} %>%
-        filter(dist <= max_dist, node > length(phylo$tip.label)) %>%
-        pull(node)
-    mutate(tree, support = ifelse(parent %in% parents, !!as.name(support_col), NA))
-}
+}   
 tree <- read.tree(tree_file) %>%
     root_tree(outgroup, ingroup)
 
 imgvr_metadata <- read.csv(imgvr_file) %>%
     mutate(Accession = paste0(UVIG, "_1")) %>%
-    mutate(Host.unknown = Host.prediction.method == '' | is.na(Host.prediction.method)) %>%
-    left_join(single_gene_blast, by = "Accession") %>%
-    mutate(Host.taxonomy.prediction = ifelse(!Host.unknown & is.na(Host.taxonomy.prediction.y), Host.taxonomy.prediction.x, Host.taxonomy.prediction.y)) %>%
-    mutate(Host.evidence = case_when(Host.unknown ~ Host.evidence, Topology == "Provirus" ~ "Prophage", T ~ Host.prediction.method))
+    mutate(Host.evidence = case_when(Topology == "Provirus" ~ "Prophage", T ~ Host.prediction.method))
 
 gov2_metadata <- data.frame(Accession = tree$tip.label) %>%
     filter(grepl("^Station", Accession)) %>%
-    mutate(Ecosystem.classification = "Environmental;Aquatic;Marine;") %>%
-    left_join(single_gene_blast, by = "Accession")
+    mutate(Ecosystem.classification = "Environmental;Aquatic;Marine;")
 
 env_metadata <- bind_rows(imgvr_metadata, gov2_metadata)
 
@@ -151,42 +150,43 @@ metadata <- bind_rows(ref_metadata, env_metadata) %>%
     get_taxon("family") %>%
     get_taxon("genus") %>%
     left_join(clusters, by = "Host.genus") %>%
-    left_join(nbla, by = "Accession") %>%
-    mutate(nblA = ifelse(is.na(nblA.x) | nblA.x == '', nblA.y, nblA.x)) %>%
-    mutate(nblA = ifelse(is.na(nblA) | nblA == '', NA, nblA)) %>%
-    select(Accession, Phage, Group, Clade, Subclade, Host, Host.phylum, Host.genus, Host.cluster, Prophage, Host.evidence, nblA, Ecosystem)
+    left_join(all_nblas, by = "Accession") %>%
+    distinct(Accession, Phage, Group, Clade, Subclade, Host, Host.phylum, Host.genus, Host.cluster, Prophage, Host.evidence, nblA, Ecosystem)
 
-tree_tib <- as_tibble(tree) %>%
-    parse_support %>%
-    pick_support_values(UFBoot, max_dist = 5) %>%
-    left_join(metadata, by = c(label = "Accession")) %>%
-    add_mrca(Clade) %>%
-    add_mrca(Subclade, max_dist = 0.745)
+tree_dat_all <- tree %>%
+    annotate_tree(metadata, max_mrca_dist)
+tree_dat_ref <- keep.tip(tree, ingroup) %>%
+    annotate_tree(metadata, 0)
 
-evidence.shapes <- c(
-    `Isolate taxonomy` = 15,
-    `Prophage` = 0,
-    `blast` = 2,
-    `CRISPR spacer match` = 1,
-    `k-mer match` = 1
-)
-cluster.colors <- with(clusters, setNames(Host.color, Host.cluster))
-ecosystems <- select(metadata, Accession, Ecosystem_tile = Ecosystem)
-ecosystem.colors <- c(
-    `Environmental;Aquatic;Marine` = "blue",
-    `Environmental;Aquatic;Freshwater` = "cyan"
-)
+write.jtree(tree_dat_all, file = jtree_file)
 
-p <- ggtree(to_treedata(tree_tib), size = 0.1, layout = "rectangular", open.angle = 45) +
-    geom_nodepoint(aes(x = branch, subset = !is.na(support) & support >= 95), size = 0.2, color = "#4d4d4dff") +
-    geom_tiplab(aes(subset = !is.na(Phage), label = Phage), size = 2, align = T, linesize = 0.1) +
-    geom_tippoint(aes(subset = !is.na(nblA), color = nblA), size = 0.5, color = "red") + new_scale_color() +
-    geom_tippoint(aes(subset = !is.na(Host.cluster), x = x + 0.05, color = Host.cluster, shape = Host.evidence)) +
-    scale_color_manual(values = cluster.colors) +
-    scale_shape_manual(values = evidence.shapes) +
-    geom_fruit(aes(x = 0, y = Accession, fill = Ecosystem_tile), ecosystems, geom_tile, axis.params = c(axis = "x", text = "Ecosystem"), offset = 0.5) +
-    scale_fill_manual(values = ecosystem.colors) + new_scale_fill() +
-    geom_cladelab(mapping = aes(subset = !is.na(Subclade_mrca), node = node, label = Subclade_mrca), align = T, offset = 0.3) +
-    geom_treescale(width = 0.4)
+plot_tree <- function(tree_dat, metadata, clusters) {
+    evidence.shapes <- c(
+        `Isolate taxonomy` = 15,
+        `Prophage` = 15,
+        `Related to isolate` = 0,
+        `CRISPR spacer match` = 1,
+        `k-mer match` = 1
+    )
+    cluster.colors <- with(clusters, setNames(Host.color, Host.cluster))
+    ecosystems <- select(metadata, Accession, Ecosystem_tile = Ecosystem)
+    ecosystem.colors <- c(
+        `Environmental;Aquatic;Marine` = "blue",
+        `Environmental;Aquatic;Freshwater` = "cyan"
+    )
+    ggtree(tree_dat, size = 0.1, layout = "rectangular", open.angle = 45) +
+        geom_nodepoint(aes(x = branch, subset = !is.na(UFBoot) & UFBoot >= 95), size = 0.2, color = "#4d4d4dff") +
+        geom_tiplab(aes(subset = !is.na(Phage), label = Phage, color = Host.cluster), size = 2, align = T, linesize = 0.1, fontface = "bold") +
+        scale_color_manual(values = cluster.colors) + new_scale_color() +
+        geom_tippoint(aes(subset = !is.na(nblA), color = nblA), size = 0.5) + new_scale_color() +
+        geom_fruit(aes(x = 0, y = Accession, fill = Ecosystem_tile), ecosystems, geom_tile, axis.params = c(axis = "x", text = "Ecosystem"), offset = 0.5, width = 0.1) +
+        scale_fill_manual(values = ecosystem.colors) + new_scale_fill() +
+        geom_cladelab(mapping = aes(subset = !is.na(Subclade_mrca), node = node, label = Subclade_mrca), align = T, offset = 0.3) +
+        geom_treescale(width = 0.4)
+}
 
-ggsave(plot_file, p, width = 8, height = 12)
+p_all <- plot_tree(tree_dat_all, metadata, clusters)
+p_ref <- plot_tree(tree_dat_ref, metadata, clusters)
+
+ggsave(plot_all_file, p_all, width = w_all, height = h_all)
+ggsave(plot_ref_file, p_ref, width = w_ref, height = h_ref)
