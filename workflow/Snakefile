@@ -14,17 +14,12 @@ with warnings.catch_warnings(record=True):
     warnings.simplefilter("always")
     phages = read_excel("input/phages.xlsx")
 
-subclades = dict(zip(phages['Accession'], phages['Subclade']))
-
 rule all:
     input:
-        expand("analysis/exonuclease/{database}_nblA.tab", database = databases),
-        expand("analysis/contigs/{database}_isolated_genes.outfmt6", database = databases),
-        "analysis/genomes/all_genomes_nblA.treefile",
         "output/phylophlan_markers9_all.svg",
         "output/phylophlan_markers9_ref.svg",
+        "output/nbla_markers9.svg",
         "output/GOV2_SRF.svg"
-        # expand("analysis/phylophlan_markers7/tmp/gene_tree1/{gene}.tre.treefile", gene = genes)
 
 rule plot_gene_tree:
     input:
@@ -117,13 +112,14 @@ rule drep:
 rule cat_genomes:
     input:
         contigs = "analysis/contigs/drep/dereplicated_genomes",
-        refs = "input/genomes"
+        refs = "input/genomes",
+        outliers = "input/outliers.txt"
     output:
         "analysis/genomes/all_genomes.fna"
     conda:
         "envs/search.yaml"
     shell:
-        "seqkit rmdup -s -o {output} {input.refs}/*.fna {input.contigs}/*.fna"
+        "seqkit rmdup -s {input.refs}/*.fna {input.contigs}/*.fna | seqkit grep -vf {input.outliers} -o {output}"
 
 rule prodigal:
     input:
@@ -203,6 +199,7 @@ rule phylophlan:
         maas = "analysis/{set}/markers.tsv"
     output:
         "analysis/phylophlan_{set}/phylophlan.tre.treefile",
+        "analysis/phylophlan_{set}/tmp/msas/exonuc.aln",
         directory("analysis/phylophlan_{set}")
     params:
         min_markers = lambda w: config["phylophlan"]["min_markers"][w.set]
@@ -320,7 +317,7 @@ rule extract_exo_regions:
     script:
         "scripts/extract_region.py"
 
-rule hmmsearch_all:
+rule hmmsearch_nbla_all:
     input:
         hmm = "analysis/profile/nblA.hmm",
         fna = "analysis/exonuclease/{database}_regions.fna"
@@ -331,7 +328,7 @@ rule hmmsearch_all:
     shell:
         "getorf -filter -find 0 {input.fna} | hmmsearch --max --cpu 1 -o {output} {input.hmm} -"
 
-rule hmmsearch_genomes:
+rule hmmsearch_nbla_genomes:
     input:
         hmm = "analysis/profile/nblA.hmm",
         fna = "analysis/genomes/all_genomes.fna"
@@ -341,6 +338,17 @@ rule hmmsearch_genomes:
         "envs/search.yaml"
     shell:
         "getorf -filter -find 0 {input.fna} | hmmsearch --max --cpu 1 -o {output} {input.hmm} -"
+
+rule hmmsearch_genomes:
+    input:
+        hmm = "analysis/profile/{profile}.hmm",
+        fna = "analysis/genomes/all_genomes.fna"
+    output:
+        "analysis/genomes/all_genomes_profile/{profile}.txt"
+    conda:
+        "envs/search.yaml"
+    shell:
+        "getorf -filter -find 0 {input.fna} | hmmsearch --cut_nc --cpu 1 -o /dev/null --tblout {output} {input.hmm} -"
 
 rule hmmsearch_genomes_proteins:
     input:
@@ -377,6 +385,40 @@ rule parse_hmmsearch_genomes:
     script:
         "scripts/parse_hmmsearch.py"
 
+rule exo_copy:
+    input:
+        "analysis/phylophlan_markers9/tmp/msas/exonuc.aln"
+    output:
+        "analysis/exonuclease/database.faa"
+    conda:
+        "envs/search.yaml"
+    shell:
+        "seqkit seq -g -o {output} {input}"
+
+rule makeblastdb_exo:
+    input:
+        "analysis/exonuclease/database.faa"
+    output:
+        "analysis/exonuclease/database.faa.pdb"
+    conda:
+        "envs/search.yaml"
+    shell:
+        "makeblastdb -in {input} -dbtype prot"
+
+rule exo_reciprocal_blast:
+    input:
+        query = "analysis/exonuclease/{database}_regions.fna",
+        db = "analysis/exonuclease/database.faa",
+        pdb = "analysis/exonuclease/database.faa.pdb"
+    output:
+        "analysis/exonuclease/{database}_regions.outfmt6"
+    conda:
+        "envs/search.yaml"
+    threads:
+        10
+    shell:
+        "blastx -query {input.query} -db {input.db} -out {output} -outfmt 6 -num_threads {threads}"
+
 rule regions_with_nbla:
     input:
         fasta = "analysis/exonuclease/{database}_regions.fna",
@@ -389,10 +431,21 @@ rule regions_with_nbla:
     script:
         "scripts/regions_with_nbla.py"
 
+rule faidx:
+    input:
+        "{prefix}"
+    output:
+        "{prefix}.fai"
+    conda:
+        "envs/search.yaml"
+    shell:
+        "seqkit faidx {input}"
+
 rule regions_for_recruitment:
     input:
         lens = "analysis/exonuclease/{database}_regions.fna.lens",
         fna = "analysis/exonuclease/{database}_regions.fna",
+        fai = "analysis/exonuclease/{database}_regions.fna.fai",
         gff = "analysis/exonuclease/{database}.gff"
     output:
         "analysis/recruitment/{database}_redundant.fna"
@@ -418,10 +471,13 @@ rule cluster_regions_for_recruitment:
 rule gtf_regions_for_recruitment:
     input:
         fasta = "analysis/recruitment/{database}.fasta",
+        blast = "analysis/exonuclease/{database}_regions.outfmt6",
         gff = "analysis/exonuclease/{database}.gff",
-        phages = "input/phages.xlsx"
+        jtree = "output/phylophlan_markers9.jtree"
     output:
         "analysis/recruitment/{database}.saf"
+    params:
+        identity = config["exonuclease"]["identity_for_assignment"]
     conda:
         "envs/python.yaml"
     script:
@@ -476,11 +532,17 @@ rule plot_gov2:
     input:
         txt = expand("analysis/recruitment/GOV2/bwa/{sra}.txt", sra = sras),
         stat = expand("fastq/GOV2/{sra}_1.fastq.stat", sra = sras),
-        metadata = "analysis/recruitment/GOV2/metadata.xlsx"
+        metadata = "analysis/recruitment/GOV2/metadata.xlsx",
+        jtree = "output/phylophlan_markers9.jtree",
+        shp = "analysis/maps/land/ne_110m_land.shp"
     output:
-        srf = "output/GOV2_SRF.svg"
+        srf = "output/GOV2_SRF.svg",
+        dcm = "output/GOV2_DCM.svg",
+        pies = "output/GOV2_pies.svg",
+        pie_data = "output/GOV2_pies.csv"
     params:
-        sras = sras
+        sras = sras,
+        colors = config["colors"]
     conda:
         "envs/r_plot_map.yaml"
     script:
@@ -531,6 +593,41 @@ rule isolated_genes_search:
     shell:
         "blastn -query {input.query} -db {input.db} -out {output} -outfmt '6 {params.cols}'"
 
+rule pol_copy:
+    input:
+        "input/pol_STIP37.faa"
+    output:
+        "analysis/pol/pol.faa"
+    shell:
+        "cp {input} {output}"
+
+rule pol_makeblast:
+    input:
+        "analysis/pol/pol.faa"
+    output:
+        "analysis/pol/pol.faa.pdb"
+    conda:
+        "envs/search.yaml"
+    shell:
+        "makeblastdb -in {input} -dbtype prot"
+
+rule search_pol:
+    input:
+        pol = "analysis/pol/pol.faa",
+        pol_pdb = "analysis/pol/pol.faa.pdb",
+        fna = "analysis/genomes/all_genomes.fna"
+    output:
+        "analysis/genomes/all_genomes_pol.txt"
+    params:
+        evalue = 1e-10,
+        minsize = 99
+    conda:
+        "envs/search.yaml"
+    threads:
+        20
+    shell:
+        "getorf -minsize {params.minsize} -find 0 -filter {input.fna} | blastp -num_threads {threads} -query - -db {input.pol} -out {output} -outfmt 6 -evalue {params.evalue}"
+
 rule plot_tree:
     input:
         tree = "analysis/phylophlan_{set}/phylophlan.tre.treefile",
@@ -539,7 +636,9 @@ rule plot_tree:
         clusters = "input/host_clusters.xlsx",
         strains = "input/host_strains.xlsx",
         exo_nbla = expand("analysis/exonuclease/{database}.gff", database = list(databases) + [ 'ref_genomes' ]),
-        genome_nbla = "analysis/genomes/all_genomes_nblA.jsonl"
+        genome_nbla = "analysis/genomes/all_genomes_nblA.jsonl",
+        psba = "analysis/genomes/all_genomes_profile/TIGR01151.1.txt",
+        pol = "analysis/genomes/all_genomes_pol.txt"
     output:
         plot_all = "output/phylophlan_{set}_all.svg",
         plot_ref = "output/phylophlan_{set}_ref.svg",
@@ -550,17 +649,40 @@ rule plot_tree:
         h_all = config["phylogeny"]["h_all"],
         w_ref = config["phylogeny"]["w_ref"],
         h_ref = config["phylogeny"]["h_ref"],
-        max_mrca_dist = config["phylogeny"]["max_mrca_dist"]
+        max_mrca_dist = config["phylogeny"]["max_mrca_dist"],
+        pol_domain = "pol_pol",
+        exo_domain = "pol_exo"
     conda:
         "envs/r.yaml"
     script:
         "scripts/plot_tree.R"
 
+rule nbla_select_genomes:
+    input:
+        "analysis/phylophlan_{set}/phylophlan.tre.treefile"
+    output:
+        "analysis/nbla/genomes_{set}.txt"
+    conda:
+        "envs/newick_utils.yaml"
+    shell:
+        "nw_labels -I {input} | sed 's/$/_/' > {output}"
+
+rule nbla_select:
+    input:
+        txt = "analysis/nbla/genomes_{set}.txt",
+        faa = "analysis/genomes/all_genomes_nblA.faa"
+    output:
+        "analysis/nbla/nblA_{set}.faa"
+    conda:
+        "envs/search.yaml"
+    shell:
+        "seqkit grep -o {output} -rf {input.txt} {input.faa}"
+
 rule nbla_mafft:
     input:
-        "analysis/genomes/all_genomes_nblA.faa"
+        "analysis/nbla/nblA_{set}.faa"
     output:
-        "analysis/genomes/all_genomes_nblA.mafft"
+        "analysis/nbla/nblA_{set}.mafft"
     conda:
         "envs/phylophlan.yaml"
     shell:
@@ -568,37 +690,131 @@ rule nbla_mafft:
 
 rule nbla_trimal:
     input:
-        "analysis/genomes/all_genomes_nblA.mafft"
+        "analysis/nbla/nblA_{set}.mafft"
     output:
-        "analysis/genomes/all_genomes_nblA.trimal"
+        "analysis/nbla/nblA_{set}.trimal"
     conda:
         "envs/phylophlan.yaml"
     shell:
         "trimal -in {input} -out {output} -automated1"
 
 # not under conda
+# not used
 rule nbla_tree_parsimony:
     input:
-        "analysis/genomes/all_genomes_nblA.trimal"
+        "analysis/nbla/nblA_{set}.trimal"
     output:
-        "analysis/genomes/all_genomes_nblA_pars.treefile"
+        "analysis/nbla/nblA_{set}_pars.treefile"
     params:
         seed = 123,
         bb = 1000,
-        prefix = "analysis/genomes/all_genomes_nblA_pars"
+        prefix = "analysis/nbla/nblA_{set}_pars"
     shell:
         "mpboot -s {input} -pre {params.prefix} -bb {params.bb} -seed {params.seed}"
 
 rule nbla_tree:
     input:
-        "analysis/genomes/all_genomes_nblA.trimal"
+        "analysis/nbla/nblA_{set}.trimal"
     output:
-        "analysis/genomes/all_genomes_nblA.treefile"
+        "analysis/nbla/nblA_{set}.treefile"
     params:
         seed = 123,
-        B = 1000,
-        prefix = "analysis/genomes/all_genomes_nblA"
+        B = 200,
+        prefix = "analysis/nbla/nblA_{set}"
     conda:
         "envs/phylophlan.yaml"
     shell:
-        "iqtree -s {input} --prefix {params.prefix} -B {params.B} --seed {params.seed}"
+        "iqtree -s {input} --prefix {params.prefix} -b {params.B} --seed {params.seed} -redo"
+
+rule plot_nbla:
+    input:
+        tree = "analysis/nbla/nblA_{set}.treefile",
+        clusters = "input/host_clusters.xlsx",
+        jtree = "output/phylophlan_{set}.jtree"
+    output:
+        plot = "output/nbla_{set}.svg",
+        jtree = "output/nbla_{set}.jtree"
+    conda:
+        "envs/r.yaml"
+    script:
+        "scripts/plot_nbla.R"
+
+rule dload_map:
+    output:
+        "analysis/maps/land/ne_110m_land.shp"
+    params:
+        url = "https://www.naturalearthdata.com/http//www.naturalearthdata.com/download/110m/physical/ne_110m_land.zip"
+    shadow:
+        "minimal"
+    shell:
+        "wget -O tmp.zip '{params.url}' && unzip tmp.zip -d $(dirname {output})"
+
+rule dload_profile:
+    output:
+        "analysis/profile/{profile}.hmm"
+    wildcard_constraints:
+        profile = "TIGR[0-9.]+"
+    params:
+        url = lambda w: f"https://ftp.ncbi.nlm.nih.gov/hmm/current/hmm_PGAP.HMM/{w.profile}.HMM"
+    shell:
+        "wget -O {output} {params.url}"
+
+rule dload_pfam:
+    output:
+        "analysis/profile/{profile}.hmm"
+    wildcard_constraints:
+        profile = "PF[0-9.]+"
+    params:
+        url = lambda w: f"https://www.ebi.ac.uk/interpro/wwwapi//entry/pfam/{w.profile}?annotation=hmm"
+    shell:
+        "wget -O- {params.url} | gzip -cd > {output}"
+
+rule align_with_cyanobacteria:
+    input:
+        "input/PF04485_Cyanobacteriota_UniRef90_2024_02.fasta",
+        "analysis/nbla/nblA_{set}.faa"
+    output:
+        "analysis/nbla/nblA_{set}_cyanobacteria.fas"
+    conda:
+        "envs/mafft.yaml"
+    shell:
+        "cat {input} | mafft --auto --reorder - > {output}"
+
+rule add_ss:
+    input:
+        "analysis/nbla/nblA_{set}_cyanobacteria.fas"
+    output:
+        "analysis/nbla/nblA_{set}_cyanobacteria.a3m"
+    conda:
+        "envs/reformat.yaml"
+    shell:
+        """
+        export PATH=$CONDA_PREFIX/scripts:$PATH
+        reformat.pl fas a3m {input} - -v 0 -M 10 | hhconsensus -i /dev/stdin -o /dev/stdout | hhfilter -i /dev/stdin -o /dev/stdout | addss.pl -v 0 stdin {output}
+        """
+
+rule trim_a3m:
+    input:
+        "analysis/nbla/nblA_{set}_cyanobacteria.a3m"
+    output:
+        "analysis/nbla/nblA_{set}_cyanobacteria_trim.a3m"
+    conda:
+        "envs/search.yaml"
+    shell:
+        "grep -v '^#' {input} | seqkit replace -sp '[a-z]' -o {output}"
+
+rule logo:
+    input:
+        aln = "analysis/nbla/nblA_{set}_cyanobacteria_trim.a3m",
+        tree = "output/nbla_{set}.jtree.bak"
+    output:
+        "output/logo_{set}.pdf"
+    params:
+        group1 = [ "A", "B" ],
+        group2 = "D",
+        outgroup = "UniRef90",
+        outliers = "IMGVR_UViG_3300042503_000838_1_5119" # NB: not a nice solution
+    conda:
+        "envs/logo.yaml"
+    script:
+        "scripts/logo.R"

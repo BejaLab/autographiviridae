@@ -12,3 +12,5 @@ dependencies:
  - r-readxl=1.4.3
  - r-ggrepel=0.9.4
  - r-maps=3.4.2
+ - r-jsonlite=1.8.8
+ - r-rgdal=1.6_7

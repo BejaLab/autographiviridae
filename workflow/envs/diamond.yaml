@@ -1,0 +1,6 @@
+channels:
+ - conda-forge
+ - bioconda
+dependencies:
+ - diamond=2.1.8
+ - emboss=6.6.0
