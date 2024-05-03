@@ -25,3 +25,4 @@ dependencies:
  - r-randomcolor=1.1.0
  - r-seqinr=4.2_30
  - r-castor=1.7.10
+ - bioconductor-biostrings

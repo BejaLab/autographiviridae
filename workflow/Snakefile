@@ -730,7 +730,8 @@ rule plot_nbla:
     input:
         tree = "analysis/nbla/nblA_{set}.treefile",
         clusters = "input/host_clusters.xlsx",
-        jtree = "output/phylophlan_{set}.jtree"
+        jtree = "output/phylophlan_{set}.jtree",
+        fasta = "analysis/genomes/all_genomes_nblA.faa"
     output:
         plot = "output/nbla_{set}.svg",
         jtree = "output/nbla_{set}.jtree"

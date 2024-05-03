@@ -14,7 +14,7 @@ library(ggforce)
 library(rgdal)
 
 if (interactive()) {
-    txt_files <- txt_files <- Sys.glob("analysis/recruitment/GOV2/bwa/ERR*.txt")
+    txt_files <- Sys.glob("analysis/recruitment/GOV2/bwa/ERR*.txt")
     sras <- sub(".txt", "", basename(txt_files))
     stat_files <- Sys.glob("fastq/GOV2/*.stat")
     metadata_file <- "analysis/recruitment/GOV2/metadata.xlsx"

@@ -17,6 +17,7 @@ with(snakemake@input, {
     tree_file <<- tree
     cluster_file <<- clusters
     jtree_file <<- jtree
+    fasta_file <<- fasta
 })
 with(snakemake@output, {
     plot_file <<- plot
@@ -28,6 +29,12 @@ with(snakemake@output, {
 
 clusters <- read_excel(cluster_file) %>%
     rename(Host.genus = Genus, Host.cluster = Cluster, Host.color = color)
+
+fasta <- read.fasta(fasta_file) %>%
+    as.character %>%
+    {data.frame(label = names(.), sequence = sapply(., paste, collapse = ""))} %>%
+    mutate(sequence = toupper(sequence)) %>%
+    separate(label, into = c("label", "description"), sep = " ", extra = "merge")
 
 metadata <- read.jtree(jtree_file) %>%
     as_tibble %>%
@@ -44,6 +51,7 @@ tree <- read.tree(tree_file) %>%
     mutate(UFBoot = as.numeric(ifelse(is.tip, NA, label))) %>%
     mutate(Accession = ifelse(is.tip, sub("_[0-9]+$", "", label), NA)) %>%
     left_join(metadata, by = "Accession") %>%
+    left_join(fasta, by = "label") %>%
     to_treedata
 write.jtree(tree, file = jtree_out_file)
 
