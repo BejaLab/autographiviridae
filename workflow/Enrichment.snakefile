@@ -1,5 +1,13 @@
+from pandas import ExcelFile
 
 proteome = 'UP000002780'
+
+results_day1 = ExcelFile('input/Day1_NblAOE_For_Go Enrichment.xlsx')
+results_day2 = ExcelFile('input/Day2_NblAOE_For_Go Enrichment.xlsx')
+
+rule all_enrichment:
+    input:
+        expand("output/enrichment-{sheet}.svg", sheet = "SemiN Ratio <-1 only NblA")
 
 rule download_uniprot:
     output:
@@ -9,47 +17,40 @@ rule download_uniprot:
     shell:
         "wget -O {output} '{params.url}'"
 
-rule extract_go_terms:
+rule uniprot_orgdb:
     input:
         "analysis/enrichment/uniprot.xml"
     output:
-        "analysis/enrichment/go-terms.tsv"
+        directory("analysis/orgDb/org.SWH8109.eg.db")
     conda:
-        "envs/python.yaml"
+        "envs/orgdb.yaml"
     script:
-        "scripts/extract_go_terms.py"
-
-rule dload_go:
-    output:
-        "analysis/enrichment/go-basic.obo"
-    params:
-        url = "https://current.geneontology.org/ontology/go-basic.obo"
-    shell:
-        "wget -O {output} {params.url}"
-
-rule enrichment_gomap:
-    input:
-        tsv = "analysis/enrichment/go-terms.tsv",
-        obo = "analysis/enrichment/go-basic.obo"
-    output:
-        BP = "analysis/enrichment/go-terms-BP.tsv",
-        MF = "analysis/enrichment/go-terms-MF.tsv",
-        CC = "analysis/enrichment/go-terms-CC.tsv"
-    conda:
-        "envs/enrichment.yaml"
-    script:
-        "scripts/enrichment-gomap.R"
+        "scripts/orgdb.R"
 
 rule enrichment:
     input:
-        results_file = "input/Day2_NblAOE_For_Go Enrichment.xlsx",
-        annot_file = "analysis/enrichment/go-terms-{db}.tsv"
+        results = "input/{day}_NblAOE_For_Go Enrichment.xlsx",
+        orgdb = "analysis/orgDb/org.SWH8109.eg.db"
     output:
-        "output/enrichment-{db}.pdf"
+        "analysis/enrichment/{day}-{sheet}.csv"
+    wildcard_constraints:
+        day = 'Day\d+'
     params:
-        sheet = "SemiN Ratio <-1 only NblA",
+        cutoff = 0.5,
         alpha = 0.05
     conda:
         "envs/enrichment.yaml"
     script:
         "scripts/enrichment.R"
+
+rule enrichment_plot:
+    input:
+        expand("analysis/enrichment/{day}-{{sheet}}.csv", day = [ "Day1", "Day2" ])
+    output:
+        "output/enrichment-{sheet}.svg",
+    params:
+        alpha = 0.05
+    conda:
+        "envs/enrichment.yaml"
+    script:
+        "scripts/enrichment_plot.R"

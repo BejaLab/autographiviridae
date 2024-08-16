@@ -807,7 +807,7 @@ rule trim_a3m:
 rule logo:
     input:
         aln = "analysis/nbla/nblA_{set}_cyanobacteria_trim.a3m",
-        tree = "output/nbla_{set}.jtree.bak"
+        tree = "output/nbla_{set}.jtree"
     output:
         "output/logo_{set}.pdf"
     params:

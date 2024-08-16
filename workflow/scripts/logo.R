@@ -3,6 +3,7 @@ library(DiffLogo)
 library(treeio)
 library(dplyr)
 library(tidyr)
+library(tibble)
 
 with(snakemake@input, {
     tree_file <<- tree
@@ -108,6 +109,6 @@ ss <- ss[ ,order(names(ss))]  %>%
 
 pdf(output_file)
 seqLogo(ss, alphabet = alphabet, stackHeight = function(x) list(height = x * 4.5, ylab = ""))
-diffLogoTable(PWMs = pwms, alphabet = alphabet, configuration = diffLogoTableConfiguration(alphabet = alphabet, enableClustering = F))
+diffLogoTable(PWMs = pwms, alphabet = alphabet, configuration = diffLogoTableConfiguration(alphabet = alphabet, enableClustering = T))
 drawDiffLogoTable(diffObj)
 dev.off()

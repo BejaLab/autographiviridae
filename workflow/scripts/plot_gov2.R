@@ -94,7 +94,6 @@ data <- lapply(txt_files, read.table, header = T) %>%
     mutate(nblA_plus = rowSums(across(contains("@nblA_plus")))) %>%
     mutate(Size = forward_scale(Total)) %>%
     mutate(nblA_pct = nblA_plus / Total)
-
 data_layers <- split(data, f = data$Layer)
 
 clade_categories <- lapply(clade_colors, t) %>%
@@ -103,6 +102,7 @@ clade_categories <- lapply(clade_colors, t) %>%
     setNames(c("clade", "nblA_plus", "nblA_minus")) %>%
     gather(type, color, -clade) %>%
     mutate(category = paste(clade, type, sep = "@")) %>%
+    arrange(desc(category)) %>%
     with(setNames(color, category))
 get_repel_coords <- function(.data, map_g, width, height) {
     grid.newpage()
@@ -139,7 +139,9 @@ my_ggplot_world <- function(shape_file) {
     all.continents <- data_frame(id = unique(as.character(continents.simple$id)))
     ggplot(all.continents) +
         geom_map(data = continents.simple, map = continents.simple, aes(map_id = id), color = "lightgray", fill = "lightgray") +
-        coord_quickmap(xlim = c(-185, 185), ylim = c(-85, 90), expand = F)
+        coord_quickmap(xlim = c(-185, 185), ylim = c(-85, 90), expand = F) +
+        scale_x_continuous(breaks = c(-180, -120, -60, 0, 60, 120, 180)) +
+        scale_y_continuous(breaks = c(-90, -60, -30, 0, 30, 60, 90))
 }
 g <- my_ggplot_world(shp_file)
 
