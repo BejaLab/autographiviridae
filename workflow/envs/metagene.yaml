@@ -1,0 +1,4 @@
+channels:
+ - bioconda
+dependencies:
+ - metagene_annotator=1.0

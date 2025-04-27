@@ -1,0 +1,9 @@
+channels:
+ - conda-forge
+ - bioconda
+dependencies:
+ - gffread=0.12.7
+ - gffcompare=0.12.6
+ - seqkit=2.4.0
+ - prodigal=2.6.3
+ - jq=1.7.1

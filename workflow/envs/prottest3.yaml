@@ -1,0 +1,6 @@
+channels:
+ - hcc
+ - conda-forge
+ - bioconda
+dependencies:
+ - prottest3=3.4.2

@@ -1,4 +1,4 @@
-from pandas import read_excel
+from pandas import read_excel, read_csv
 import warnings
 
 configfile: "config.yaml"
@@ -9,6 +9,10 @@ ref_contigs ,= glob_wildcards("input/ref_contigs/{acc}.fna")
 fragments ,= glob_wildcards("input/genomes_pol/{acc}.faa")
 
 sras ,= glob_wildcards("fastq/GOV2/{sra}_1.fastq.gz")
+
+include: 'Cyanorak.snakefile'
+include: 'NblAs.snakefile'
+include: 'Gene_predict.snakefile'
 
 with warnings.catch_warnings(record=True):
     warnings.simplefilter("always")
@@ -45,42 +49,6 @@ rule plot_gene_tree:
         "envs/r.yaml"
     script:
         "scripts/plot_tree.R"
-
-rule nbla_align:
-    input:
-        "input/profile/nblA.fasta",
-        "input/profile/nblA_more.fasta"
-    output:
-        "analysis/profile/nblA.fas"
-    conda:
-        "envs/mafft.yaml"
-    shell:
-        "cat {input} | mafft --auto --reorder - > {output}"
-
-rule fas_a2m:
-    input:
-        "analysis/profile/nblA.fas"
-    output:
-        "analysis/profile/nblA.a2m"
-    conda:
-        "envs/reformat.yaml"
-    shell:
-        """
-        export PATH=$CONDA_PREFIX/scripts:$PATH
-        reformat.pl fas a2m {input} {output} -M 50
-        """
-
-rule build_hmm:
-    input:
-        "analysis/profile/nblA.a2m"
-    output:
-        "analysis/profile/nblA.hmm"
-    params:
-        profile = "nblA"
-    conda:
-        "envs/search.yaml"
-    shell:
-        "hmmbuild -n {params.profile} {output} {input}"
 
 rule split_contigs:
     input:
@@ -673,72 +641,12 @@ rule nbla_select:
         faa = "analysis/genomes/all_genomes_nblA.faa"
     output:
         "analysis/nbla/nblA_{set}.faa"
+    wildcard_constraints:
+        set = '|'.join(config["phylophlan"]["min_markers"])
     conda:
         "envs/search.yaml"
     shell:
         "seqkit grep -o {output} -rf {input.txt} {input.faa}"
-
-rule nbla_mafft:
-    input:
-        "analysis/nbla/nblA_{set}.faa"
-    output:
-        "analysis/nbla/nblA_{set}.mafft"
-    conda:
-        "envs/phylophlan.yaml"
-    shell:
-        "mafft --auto --reorder {input} > {output}"
-
-rule nbla_trimal:
-    input:
-        "analysis/nbla/nblA_{set}.mafft"
-    output:
-        "analysis/nbla/nblA_{set}.trimal"
-    conda:
-        "envs/phylophlan.yaml"
-    shell:
-        "trimal -in {input} -out {output} -automated1"
-
-# not under conda
-# not used
-rule nbla_tree_parsimony:
-    input:
-        "analysis/nbla/nblA_{set}.trimal"
-    output:
-        "analysis/nbla/nblA_{set}_pars.treefile"
-    params:
-        seed = 123,
-        bb = 1000,
-        prefix = "analysis/nbla/nblA_{set}_pars"
-    shell:
-        "mpboot -s {input} -pre {params.prefix} -bb {params.bb} -seed {params.seed}"
-
-rule nbla_tree:
-    input:
-        "analysis/nbla/nblA_{set}.trimal"
-    output:
-        "analysis/nbla/nblA_{set}.treefile"
-    params:
-        seed = 123,
-        B = 200,
-        prefix = "analysis/nbla/nblA_{set}"
-    conda:
-        "envs/phylophlan.yaml"
-    shell:
-        "iqtree -s {input} --prefix {params.prefix} -b {params.B} --seed {params.seed} -redo"
-
-rule plot_nbla:
-    input:
-        tree = "analysis/nbla/nblA_{set}.treefile",
-        clusters = "input/host_clusters.xlsx",
-        jtree = "output/phylophlan_{set}.jtree",
-        fasta = "analysis/genomes/all_genomes_nblA.faa"
-    output:
-        plot = "output/nbla_{set}.svg",
-        jtree = "output/nbla_{set}.jtree"
-    conda:
-        "envs/r.yaml"
-    script:
-        "scripts/plot_nbla.R"
 
 rule dload_map:
     output:
@@ -749,73 +657,3 @@ rule dload_map:
         "minimal"
     shell:
         "wget -O tmp.zip '{params.url}' && unzip tmp.zip -d $(dirname {output})"
-
-rule dload_profile:
-    output:
-        "analysis/profile/{profile}.hmm"
-    wildcard_constraints:
-        profile = "TIGR[0-9.]+"
-    params:
-        url = lambda w: f"https://ftp.ncbi.nlm.nih.gov/hmm/current/hmm_PGAP.HMM/{w.profile}.HMM"
-    shell:
-        "wget -O {output} {params.url}"
-
-rule dload_pfam:
-    output:
-        "analysis/profile/{profile}.hmm"
-    wildcard_constraints:
-        profile = "PF[0-9.]+"
-    params:
-        url = lambda w: f"https://www.ebi.ac.uk/interpro/wwwapi//entry/pfam/{w.profile}?annotation=hmm"
-    shell:
-        "wget -O- {params.url} | gzip -cd > {output}"
-
-rule align_with_cyanobacteria:
-    input:
-        "input/PF04485_Cyanobacteriota_UniRef90_2024_02.fasta",
-        "analysis/nbla/nblA_{set}.faa"
-    output:
-        "analysis/nbla/nblA_{set}_cyanobacteria.fas"
-    conda:
-        "envs/mafft.yaml"
-    shell:
-        "cat {input} | mafft --auto --reorder - > {output}"
-
-rule add_ss:
-    input:
-        "analysis/nbla/nblA_{set}_cyanobacteria.fas"
-    output:
-        "analysis/nbla/nblA_{set}_cyanobacteria.a3m"
-    conda:
-        "envs/reformat.yaml"
-    shell:
-        """
-        export PATH=$CONDA_PREFIX/scripts:$PATH
-        reformat.pl fas a3m {input} - -v 0 -M 10 | hhconsensus -i /dev/stdin -o /dev/stdout | hhfilter -i /dev/stdin -o /dev/stdout | addss.pl -v 0 stdin {output}
-        """
-
-rule trim_a3m:
-    input:
-        "analysis/nbla/nblA_{set}_cyanobacteria.a3m"
-    output:
-        "analysis/nbla/nblA_{set}_cyanobacteria_trim.a3m"
-    conda:
-        "envs/search.yaml"
-    shell:
-        "grep -v '^#' {input} | seqkit replace -sp '[a-z]' -o {output}"
-
-rule logo:
-    input:
-        aln = "analysis/nbla/nblA_{set}_cyanobacteria_trim.a3m",
-        tree = "output/nbla_{set}.jtree"
-    output:
-        "output/logo_{set}.pdf"
-    params:
-        group1 = [ "A", "B" ],
-        group2 = "D",
-        outgroup = "UniRef90",
-        outliers = "IMGVR_UViG_3300042503_000838_1_5119" # NB: not a nice solution
-    conda:
-        "envs/logo.yaml"
-    script:
-        "scripts/logo.R"

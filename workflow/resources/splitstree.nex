@@ -1,0 +1,10 @@
+#nexus
+BEGIN st_Assumptions;
+uptodate;
+chartransform=${char_transform};
+disttransform=NeighborNet;
+splitstransform=EqualAngle;
+SplitsPostProcess filter=dimension value=4;
+ exclude  no missing;
+autolayoutnodelabels;
+END; [st_Assumptions]
