@@ -95,59 +95,37 @@ rule dload_cyanobacteria:
     output:
         "analysis/nbla/nblA_cyanobacteria.faa"
     params:
-        # NblAs from Cyanobacteriota [1117] without "Prochlorococcaceae"[1890426] and "Synechococcaceae"[2881426] except Synechococcus elongatus [32046]
-        query = "xref:pfam-PF04485 AND taxonomy_id:1117 ((NOT taxonomy_id:1890426 NOT taxonomy_id:2881426) OR taxonomy_id:32046)"
+        # NblAs from Cyanobacteriota[1117] without "other cyanobacteria"[1983111], "Prochlorococcaceae"[1890426] and "Synechococcaceae"[2881426] except Synechococcus elongatus[32046]
+        query = "xref:pfam-PF04485 AND taxonomy_id:1117 ((NOT taxonomy_id:1890426 NOT taxonomy_id:2881426) OR taxonomy_id:32046) NOT taxonomy_id:1983111"
     shell:
         "wget -qO {output} 'https://rest.uniprot.org/uniprotkb/stream?download=true&format=fasta&query={params.query}'"
 
-# deprecated
-rule align_with_cyanobacteria:
+rule nbla_metadata:
     input:
-        "input/PF04485_Cyanobacteriota_UniRef90_2024_02.fasta",
-        "analysis/nbla/nblA_{set}.faa"
+        jtree = "output/phylophlan_markers9.jtree",
+        ingroup = "analysis/nbla/nblA_markers9.faa",
+        pro_syn = "analysis/nbla/nblA_picocyano.faa",
+        cyanorak = "analysis/picocyano/cyanorak/organisms.csv",
+        img = "input/IMG_organisms.csv",
+        refs = "input/profile/nblA_refs.faa",
+        cyanobacteria = "analysis/nbla/nblA_cyanobacteria.faa"
     output:
-        "analysis/nbla/nblA_{set}_cyanobacteria.fas"
-    conda:
-        "envs/mafft.yaml"
-    shell:
-        "cat {input} | mafft --auto --reorder - > {output}"
-
-rule add_ss:
-    input:
-        "analysis/nbla/nblA_all_cdhit.mafft"
-    output:
-        "analysis/nbla/nblA_all_cdhit.a3m"
-    conda:
-        "envs/reformat.yaml"
+        "analysis/nbla/nblA_metadata.csv"
     params:
-        M = 50
-    shell:
-        """
-        export PATH=$CONDA_PREFIX/scripts:$PATH
-        reformat.pl fas a3m {input} - -v 0 -M {params.M} | hhconsensus -i /dev/stdin -o /dev/stdout | addss.pl -v 0 stdin {output}
-        """
-
-rule trim_a3m:
-    input:
-        "analysis/nbla/nblA_all_cdhit.a3m"
-    output:
-        "analysis/nbla/nblA_all_cdhit.fas"
+        show_genomes = [ 'Pro_SS120' ]
     conda:
-        "envs/search.yaml"
-    shell:
-        "grep -v '^#' {input} | seqkit replace -sp '[a-z]' | seqkit grep -vp ss_pred -vp ss_conf -vrp _consensus | seqkit seq -i -o {output}"
+        "envs/r.yaml"
+    script:
+        "scripts/nbla_metadata.R"
 
 rule logo:
     input:
-        aln = "analysis/nbla/nblA_{set}_cyanobacteria_trim.a3m",
-        tree = "output/nbla_{set}.jtree"
+        aln = "analysis/nbla/nblA_all_cdhit.a3m",
+        metadata = "analysis/nbla/nblA_metadata.csv"
     output:
         "output/logo_{set}.pdf"
     params:
-        group1 = [ "A", "B" ],
-        group2 = "D",
-        outgroup = "UniRef90",
-        outliers = "IMGVR_UViG_3300042503_000838_1_5119" # NB: not a nice solution
+        min_seqs = 10
     conda:
         "envs/logo.yaml"
     script:
@@ -169,7 +147,7 @@ rule cat_fasta:
     input:
         "input/profile/nblA_refs.faa",
         "analysis/nbla/nblA_markers9.faa",
-        "analysis/nbla/nblA_cyanorak.faa",
+        "analysis/nbla/nblA_picocyano.faa",
         "analysis/nbla/nblA_cyanobacteria.faa"
     output:
         "analysis/nbla/nblA_all.faa"
@@ -207,41 +185,42 @@ rule all_nblas_trim:
     output:
         fasta = "analysis/nbla/nblA_all_cdhit.trim.faa",
         cols = "analysis/nbla/nblA_all_cdhit.trim.txt"
+    params:
+        mode = "strict",
+        block = 15
     conda:
         "envs/phylophlan.yaml"
     shell:
-        "trimal -in {input} -automated1 -out {output.fasta} -colnumbering | grep -o '[[:digit:]]*' > {output.cols}"
+        "trimal -in {input} -{params.mode} -block {params.block} -out {output.fasta} -colnumbering | grep -o '[[:digit:]]*' > {output.cols}"
 
-rule add_ss_cdhit:
+rule all_nblas_strip:
     input:
-        "analysis/nbla/nblA_all_cdhit.a3m"
+        fasta = "analysis/nbla/nblA_all_cdhit.mafft",
+        cols = "analysis/nbla/nblA_all_cdhit.trim.txt"
     output:
-        "analysis/nbla/nblA_all_cdhit.ss.a3m"
+        "analysis/nbla/nblA_all_cdhit.strip.faa"
+    conda:
+        "envs/phylophlan.yaml"
+    shell:
+        """
+        readarray COLS < {input.cols}
+        trimal -selectcols {{ "${{COLS[0]}}-${{COLS[-1]}}" }} -complementary -in {input.fasta} -out {output}
+        """
+
+rule add_ss:
+    input:
+        "analysis/nbla/nblA_all_cdhit.strip.faa"
+    output:
+        "analysis/nbla/nblA_all_cdhit.a3m"
     conda:
         "envs/reformat.yaml"
+    params:
+        M = 50
     shell:
         """
         export PATH=$CONDA_PREFIX/scripts:$PATH
-        hhconsensus -i {input} -o /dev/stdout | hhfilter -i /dev/stdin -o /dev/stdout | addss.pl -v 0 stdin {output}
+        reformat.pl fas a3m {input} - -v 0 -M {params.M} | hhconsensus -i /dev/stdin -o /dev/stdout | addss.pl -v 0 stdin stdout | grep -v '^#' > {output}
         """
-
-# Not used
-rule prottest:
-    input:
-        "analysis/nbla/nblA_all_cdhit.fas"
-    output:
-        "analysis/nbla/nblA_all_cdhit_prottest.txt"
-    log:
-        "analysis/nbla/nblA_all_cdhit_prottest.log"
-    params:
-        flags = [ "-I", "-G", "-IG" ], # -F not supported by splitstree, -I and -IG added just for completeness
-        models = [ "-Dayhoff", "-JTT", "-WAG" ] # No mt* and cp* models
-    conda:
-        "envs/prottest3.yaml"
-    threads:
-        10
-    shell:
-        "prottest3 -i {input} -o {output} -threads {threads} {params.flags} {params.models} &> {log}"
 
 rule splitstree_exec_file:
     input:
@@ -266,11 +245,8 @@ rule splitstree_run:
 rule plot_network:
     input:
         network = "analysis/nbla/nbla_all_cdhit.nex",
-        cyanorak = "analysis/cyanorak/organisms.csv",
-        phage_jtree = "output/phylophlan_markers9.jtree",
-        clstr = "analysis/nbla/nblA_all_cdhit.faa.clstr",
-        cyanobacteria = "analysis/nbla/nblA_cyanobacteria.faa", 
-        refs = "input/profile/nblA_refs.faa"
+        metadata = "analysis/nbla/nblA_metadata.csv",
+        clstr = "analysis/nbla/nblA_all_cdhit.faa.clstr"
     output:
         "output/network.svg"
     conda:

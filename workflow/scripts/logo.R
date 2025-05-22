@@ -1,21 +1,25 @@
 library <- function(...) suppressPackageStartupMessages(base::library(...))
 library(DiffLogo)
-library(treeio)
 library(dplyr)
 library(tidyr)
-library(tibble)
+library(Biostrings)
 
 with(snakemake@input, {
-    tree_file <<- tree
+    metadata_file <<- metadata
     aln_file <<- aln
 })
 with(snakemake@params, {
-    group1_clades <<- group1
-    group2_clades <<- group2
-    outliers <<- outliers
-    outgroup_prefix <<- outgroup
+    min_seqs <<- min_seqs
+    js_threshold <<- 0.9
 })
 output_file <- unlist(snakemake@output)
+
+groups <- read.csv(metadata_file) %>%
+    select(label, category = nbla_category2) %>%
+    group_by(category) %>%
+    filter(n() >= min_seqs) %>%
+    split(f = .$category) %>%
+    lapply(pull, "label")
 
 zappo <- c(
     ILVAM = "#ffafaf",
@@ -24,7 +28,8 @@ zappo <- c(
     DE = "#ff0000",
     STNQ = "#00ff00",
     PG = "#ff00ff",
-    C = "#ffff00"
+    C = "#ffff00",
+    X = "black"
 )
 alphabet <- data.frame(chars = names(zappo), cols = unname(zappo)) %>%
     separate_rows(chars, sep = "") %>%
@@ -35,25 +40,12 @@ alphabet$supportReverseComplement <- F
 alphabet$size <- length(alphabet$chars)
 class(alphabet) <- "Alphabet"
 
-aln <- read.fasta(aln_file, type = "AA") %>%
+aln <- readBStringSet(aln_file) %>%
     as.character %>%
-    lapply(paste, collapse = "") %>%
-    unlist %>%
-    toupper
+    lapply(function(x) gsub("[a-z]", "", x)) %>%
+    lapply(function(x) gsub("-", "X", x))
 names(aln) <- sub(" .*", "", names(aln))
-aln <- aln[!grepl("_consensus", names(aln))]
 
-tree <- as_tibble(read.jtree(tree_file)) 
-
-to_pwm <- function(labels, aln, alphabet) {
-    labels <- labels[labels %in% names(aln)]
-    getPwmFromAlignment(aln[labels], alphabet = alphabet) %>%
-        as.data.frame
-}
-select_labels <- function(tree, clades, outliers) {
-    filter(tree, Clade_assigned %in% clades, ! label %in% outliers) %>%
-        pull(label)
-}
 get_max <- function(pwm) {
     rownames_to_column(pwm, "aa") %>%
         gather(pos, p, -aa) %>%
@@ -64,43 +56,31 @@ get_max <- function(pwm) {
         arrange(pos) %>%
         pull(p)
 }
+labels <- lapply(names(groups), function(g) {
+    groups[[g]][groups[[g]] %in% names(aln)]
+}) %>% setNames(names(groups))
+pwms <- lapply(labels, function(group_labels) {
+    pwm <- getPwmFromAlignment(aln[group_labels], alphabet = alphabet)
+    as.data.frame(pwm)
+})
+sizes <- unlist(lapply(labels, length))
 
-group1_labels <- select_labels(tree, group1_clades, outliers)
-group1 <- to_pwm(group1_labels, aln, alphabet)
-group2_labels <- select_labels(tree, group2_clades, outliers)
-group2 <- to_pwm(group2_labels, aln, alphabet)
-outgroup_labels <- names(aln) %>%
-    `[`(grepl(outgroup_prefix, .))
-outgroup <- to_pwm(outgroup_labels, aln, alphabet)
+diffObj <- prepareDiffLogoTable(pwms, alphabet = alphabet, configuration = diffLogoTableConfiguration(alphabet = alphabet, enableClustering = T))
+diffObj$diffLogoObjMatrix <- enrichDiffLogoTableWithPvalues(diffObj$diffLogoObjMatrix, sizes)
+# trick drawDiffLogoTable into showing asterisks for positions with JS divergence above threshold
+diffObj$diffLogoObjMatrix <- lapply(diffObj$diffLogoObjMatrix, function(x) lapply(x, function(y) {
+    y$pvals <- ifelse(y$heights > js_threshold & y$pvals < 0.01, 0, 1)
+    return(y)
+}))
 
-diffObj <- prepareDiffLogoTable(list(group1 = group1, group2 = group2), alphabet = alphabet, configuration = diffLogoTableConfiguration(alphabet = alphabet, enableClustering = F))
-diffObj$diffLogoObjMatrix <- enrichDiffLogoTableWithPvalues(diffObj$diffLogoObjMatrix, c(group1 = length(group1_labels), group2 = length(group2_labels)))
-
-data <- data.frame(group1 = get_max(group1), group2 = get_max(group2)) %>%
-    mutate(pvals12 = diffObj$diffLogoObjMatrix$group1$group2$pvals) %>%
-    mutate(pvals21 = diffObj$diffLogoObjMatrix$group2$group1$pvals) %>%
-    mutate(js = diffObj$diffLogoObjMatrix$group2$group1$heights) %>%
-    mutate(pos = 1:n())
-
-pwms <- list(
-    group1 = group1,
-    group2 = group2,
-    outgroup = outgroup
-)
-sizes <- c(
-    group1 = length(group1_labels),
-    group2 = length(group2_labels),
-    outgroup = length(outgroup_labels)
-)
-
-ss <- data.frame(pred = aln["ss_pred"], conf = aln["ss_conf"]) %>%
+ss <- data.frame(pred = aln$ss_pred, conf = aln$ss_conf) %>%
     separate_rows(pred, conf, sep = "") %>%
     filter(pred != "") %>%
     mutate(conf = as.integer(conf) / 9) %>%
     mutate(pos = 1:n()) %>%
     spread(pred, conf, fill = 0) %>%
     select(-pos) %>%
-    mutate(Y = 1 - rowSums(.))
+    mutate(Y = 1 - rowSums(.)) # dummy character to guarantee sum == 1
 missing <- setdiff(alphabet$chars, names(ss))
 ss[missing] <- 0
 ss <- ss[ ,order(names(ss))]  %>%
@@ -109,6 +89,6 @@ ss <- ss[ ,order(names(ss))]  %>%
 
 pdf(output_file)
 seqLogo(ss, alphabet = alphabet, stackHeight = function(x) list(height = x * 4.5, ylab = ""))
-diffLogoTable(PWMs = pwms, alphabet = alphabet, configuration = diffLogoTableConfiguration(alphabet = alphabet, enableClustering = T))
+# diffLogoTable(PWMs = pwms, alphabet = alphabet, configuration = diffLogoTableConfiguration(alphabet = alphabet, enableClustering = T))
 drawDiffLogoTable(diffObj)
 dev.off()

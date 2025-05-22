@@ -10,7 +10,7 @@ fragments ,= glob_wildcards("input/genomes_pol/{acc}.faa")
 
 sras ,= glob_wildcards("fastq/GOV2/{sra}_1.fastq.gz")
 
-include: 'Cyanorak.snakefile'
+include: 'Picocyanobacteria.snakefile'
 include: 'NblAs.snakefile'
 include: 'Gene_predict.snakefile'
 
