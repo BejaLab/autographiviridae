@@ -16,7 +16,10 @@ with(snakemake@input, {
     network_file <<- network   # analysis/nbla/nbla_all_cdhit.nex
     clstr_file <<- clstr # analysis/nbla/nblA_all_cdhit.faa.clstr
 })
-plot_file <- unlist(snakemake@output)
+with(snakemake@output, {
+    plot_file <<- plot
+    data_file <<- data
+})
 
 read_clstr <- function(file_name) {
     read.table(file_name, col.names = c("col1", "col2", "col3", "col4", "col5"), fill = T) %>%
@@ -55,7 +58,7 @@ add_node_data <- function(p, more_data) {
     p$data <- left_join(p$data, more_data, by = "label")
     return(p)
 }
-
+write.csv(node_data, data_file)
 p <- ggsplitnet(network, size = 0.1) %>% add_node_data(node_data) +
     geom_point2(aes(subset = !is.na(Group), x = x, y = y, color = Group, shape = Category)) +
     geom_tiplab2(aes(label = alias, x = x_ext(xend, yend, x, y, 0.03), y = y_ext(xend, yend, x, y, 0.03)), color = "gray30") +

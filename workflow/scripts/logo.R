@@ -12,7 +12,10 @@ with(snakemake@params, {
     min_seqs <<- min_seqs
     js_threshold <<- 0.9
 })
-output_file <- unlist(snakemake@output)
+with(snakemake@output, {
+    data_file <<- data
+    plot_file <<- plot
+})
 
 groups <- read.csv(metadata_file) %>%
     select(label, category = nbla_category2) %>%
@@ -65,6 +68,9 @@ pwms <- lapply(labels, function(group_labels) {
 })
 sizes <- unlist(lapply(labels, length))
 
+pwms_df <- bind_rows(pwms, .id = "label")
+write.csv(pwms_df, file = data_file)
+
 diffObj <- prepareDiffLogoTable(pwms, alphabet = alphabet, configuration = diffLogoTableConfiguration(alphabet = alphabet, enableClustering = T))
 diffObj$diffLogoObjMatrix <- enrichDiffLogoTableWithPvalues(diffObj$diffLogoObjMatrix, sizes)
 # trick drawDiffLogoTable into showing asterisks for positions with JS divergence above threshold
@@ -87,7 +93,7 @@ ss <- ss[ ,order(names(ss))]  %>%
     t %>% as.data.frame %>%
     `names<-`(1:ncol(.))
 
-pdf(output_file)
+pdf(plot_file)
 seqLogo(ss, alphabet = alphabet, stackHeight = function(x) list(height = x * 4.5, ylab = ""))
 # diffLogoTable(PWMs = pwms, alphabet = alphabet, configuration = diffLogoTableConfiguration(alphabet = alphabet, enableClustering = T))
 drawDiffLogoTable(diffObj)

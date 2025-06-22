@@ -20,9 +20,11 @@ with warnings.catch_warnings(record=True):
 
 rule all:
     input:
+        "output/NblA_network.nex", "output/NblA_network.svg", "output/NblA_network.csv",
         "output/phylophlan_markers9_all.svg",
         "output/phylophlan_markers9_ref.svg",
         "output/nbla_markers9.svg",
+        "output/logo_markers9.pdf", "output/logo_markers9.csv",
         "output/GOV2_SRF.svg"
 
 rule plot_gene_tree:

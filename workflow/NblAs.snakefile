@@ -123,7 +123,8 @@ rule logo:
         aln = "analysis/nbla/nblA_all_cdhit.a3m",
         metadata = "analysis/nbla/nblA_metadata.csv"
     output:
-        "output/logo_{set}.pdf"
+        plot = "output/logo_{set}.pdf",
+        data = "output/logo_{set}.csv"
     params:
         min_seqs = 10
     conda:
@@ -242,13 +243,26 @@ rule splitstree_run:
     shell:
         "xvfb-run -a SplitsTreeCMD -x 'IMPORT FILE={input.fasta} DATATYPE=PROTEIN; EXECUTE FILE={input.nexus}; UPDATE; SAVE FILE={output}; QUIT;'"
 
+rule network_add_traits:
+    input:
+        nexus = "analysis/nbla/nbla_all_cdhit.nex",
+        data = "analysis/nbla/nblA_metadata.csv",
+        clstr = "analysis/nbla/nblA_all_cdhit.faa.clstr"
+    output:
+        "output/NblA_network.nex"
+    conda:
+        "envs/python.yaml"
+    script:
+        "scripts/nexus_add_traits.py"
+
 rule plot_network:
     input:
         network = "analysis/nbla/nbla_all_cdhit.nex",
         metadata = "analysis/nbla/nblA_metadata.csv",
         clstr = "analysis/nbla/nblA_all_cdhit.faa.clstr"
     output:
-        "output/network.svg"
+        plot = "output/NblA_network.svg",
+        data = "output/NblA_network.csv"
     conda:
         "envs/r_plot_network.yaml"
     script:
